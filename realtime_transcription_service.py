@@ -795,16 +795,19 @@ class RealtimeTranscriptionService:
         logger.info(f"   Request headers: {dict(websocket.request_headers)}")
         
         try:
+            logger.info(f"Attempting to send connection established message...")
             await self.send_message(websocket, {
                 'type': 'connection_established',
                 'connection_id': connection_id,
                 'timestamp': datetime.now().isoformat()
             })
+            logger.info(f"✅ Connection established message sent successfully")
             
+            logger.info(f"Starting message handler loop...")
             await self.handle_messages(websocket, connection_id)
             
-        except websockets.exceptions.ConnectionClosed:
-            logger.info(f"🔌 Connection closed: {connection_id}")
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.info(f"🔌 Connection closed: {connection_id} - {e}")
         except Exception as e:
             logger.error(f"❌ Error handling connection {connection_id}: {e}", exc_info=True)
         finally:
@@ -949,9 +952,11 @@ class RealtimeTranscriptionService:
         """Send JSON message to client"""
         try:
             message = json.dumps(data)
+            logger.debug(f"Sending message: {data.get('type', 'unknown')}")
             await websocket.send(message)
+            logger.debug(f"✅ Message sent successfully")
         except Exception as e:
-            logger.error(f"❌ Error sending message: {e}")
+            logger.error(f"❌ Error sending message: {e}", exc_info=True)
     
     async def send_error(self, websocket, error: str):
         """Send error message"""
@@ -986,29 +991,21 @@ async def main():
     else:
         logger.warning("⚠️ DEEPGRAM_API_KEY not found in environment")
     
-    # Create a custom WebSocket server that accepts proxied HTTPS connections
-    import websockets.legacy.server
-    
-    class ProxiedWebSocketServerProtocol(websockets.legacy.server.WebSocketServerProtocol):
-        """WebSocket protocol that handles proxied HTTPS connections from Render/Cloudflare"""
-        
-        async def process_request(self, path, request_headers):
-            """Accept connections proxied through HTTPS"""
-            # Log the connection attempt
-            logger.info(f"Processing request from: {request_headers.get('origin', 'unknown')}")
-            # Return None to accept the connection
-            return None
+    # Configure WebSocket server to work behind Render/Cloudflare proxy
+    # Define a check_origin function that always returns True
+    def check_origin(origin):
+        logger.info(f"Origin check for: {origin}")
+        return True  # Accept all origins
     
     async with websockets.serve(
         service.handle_connection,
         host,
         port,
         ping_interval=20,
-        ping_timeout=10,
-        create_protocol=ProxiedWebSocketServerProtocol
+        ping_timeout=10
     ):
         logger.info(f"✅ Service ready on ws://{host}:{port}")
-        logger.info(f"✅ WebSocket server accepting proxied HTTPS connections")
+        logger.info(f"✅ WebSocket server listening for connections")
         await asyncio.Future()  # Run forever
 
 
