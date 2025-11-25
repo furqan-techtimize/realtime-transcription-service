@@ -123,7 +123,7 @@ class DeepgramTranscriber:
             self.deepgram_ws = await asyncio.wait_for(
                 websockets.connect(
                     url,
-                    additional_headers={
+                    extra_headers={
                         "Authorization": f"Token {self.api_key}"
                     },
                     ping_interval=20,  # Send ping every 20 seconds
