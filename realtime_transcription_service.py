@@ -983,14 +983,25 @@ async def main():
     else:
         logger.warning("⚠️ DEEPGRAM_API_KEY not found in environment")
     
+    # Process origins header to allow all origins for WebSocket connections
+    async def process_request(path, request_headers):
+        """Process WebSocket handshake to allow CORS"""
+        origin = request_headers.get("Origin")
+        logger.info(f"WebSocket connection attempt from origin: {origin}")
+        # Return None to accept the connection with default headers
+        # The Sec-WebSocket-Accept will be calculated automatically
+        return None
+    
     async with websockets.serve(
         service.handle_connection,
         host,
         port,
         ping_interval=20,
-        ping_timeout=10
+        ping_timeout=10,
+        process_request=process_request
     ):
         logger.info(f"✅ Service ready on ws://{host}:{port}")
+        logger.info(f"✅ Accepting WebSocket connections from all origins")
         await asyncio.Future()  # Run forever
 
 
