@@ -986,15 +986,29 @@ async def main():
     else:
         logger.warning("⚠️ DEEPGRAM_API_KEY not found in environment")
     
+    # Create a custom WebSocket server that accepts proxied HTTPS connections
+    import websockets.legacy.server
+    
+    class ProxiedWebSocketServerProtocol(websockets.legacy.server.WebSocketServerProtocol):
+        """WebSocket protocol that handles proxied HTTPS connections from Render/Cloudflare"""
+        
+        async def process_request(self, path, request_headers):
+            """Accept connections proxied through HTTPS"""
+            # Log the connection attempt
+            logger.info(f"Processing request from: {request_headers.get('origin', 'unknown')}")
+            # Return None to accept the connection
+            return None
+    
     async with websockets.serve(
         service.handle_connection,
         host,
         port,
         ping_interval=20,
-        ping_timeout=10
+        ping_timeout=10,
+        create_protocol=ProxiedWebSocketServerProtocol
     ):
         logger.info(f"✅ Service ready on ws://{host}:{port}")
-        logger.info(f"✅ WebSocket server is listening for connections")
+        logger.info(f"✅ WebSocket server accepting proxied HTTPS connections")
         await asyncio.Future()  # Run forever
 
 
