@@ -964,12 +964,15 @@ async def main():
     """Start the real-time transcription service"""
     service = RealtimeTranscriptionService()
     
-    port = 8766  # Different port from any existing service
+    # Use PORT from environment (for Render/deployment) or default to 8766
+    port = int(os.getenv('PORT', 8766))
+    # Bind to 0.0.0.0 for deployment platforms (Render, etc.)
+    host = os.getenv('HOST', '0.0.0.0')
     
     logger.info("=" * 60)
     logger.info("🎤 REAL-TIME TRANSCRIPTION SERVICE")
     logger.info("=" * 60)
-    logger.info(f"Starting WebSocket server on ws://localhost:{port}")
+    logger.info(f"Starting WebSocket server on ws://{host}:{port}")
     logger.info("Real-world implementation - NO SIMULATION")
     logger.info("=" * 60)
     
@@ -982,12 +985,12 @@ async def main():
     
     async with websockets.serve(
         service.handle_connection,
-        "localhost",
+        host,
         port,
         ping_interval=20,
         ping_timeout=10
     ):
-        logger.info(f"✅ Service ready on ws://localhost:{port}")
+        logger.info(f"✅ Service ready on ws://{host}:{port}")
         await asyncio.Future()  # Run forever
 
 
