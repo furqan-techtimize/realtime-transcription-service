@@ -112,10 +112,11 @@ class DeepgramTranscriber:
             # Sample rate: 16000Hz for optimal compatibility with file uploads and live recording
             diarize = str(config.get('diarize', False)).lower()
             params = f"model={model}&language={language}&smart_format={smart_format}&interim_results={interim_results}&punctuate=true&diarize={diarize}&encoding=linear16&sample_rate=16000&channels=1"
-            # Include token in URL for maximum compatibility
-            url = f"wss://api.deepgram.com/v1/listen?token={self.api_key}&{params}"
+            # Include token in URL for maximum compatibility - strip any whitespace from API key
+            clean_api_key = self.api_key.strip() if self.api_key else ""
+            url = f"wss://api.deepgram.com/v1/listen?token={clean_api_key}&{params}"
             
-            logger.info(f"Connecting to: {url}")
+            logger.info(f"Connecting to Deepgram with API key: {clean_api_key[:8]}... (URL length: {len(url)})")
             
             # Store config for potential reconnection
             self.connection_config = config
@@ -921,7 +922,9 @@ class RealtimeTranscriptionService:
                     await self.send_error(websocket, error_msg)
                     return
                 
-                logger.info(f"Using Deepgram API key: {api_key[:8]}...")
+                # Strip whitespace and validate
+                api_key = api_key.strip()
+                logger.info(f"Using Deepgram API key: {api_key[:8]}... (length: {len(api_key)})")
                 transcriber = DeepgramTranscriber(api_key, result_callback)
                 
             elif provider == 'aws':
