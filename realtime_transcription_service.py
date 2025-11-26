@@ -102,7 +102,7 @@ class DeepgramTranscriber:
             
             import websockets
             
-            # Build Deepgram WebSocket URL with parameters and token
+            # Build Deepgram WebSocket URL with parameters
             model = config.get('model', 'nova-2')
             language = config.get('language', 'en-US')
             smart_format = str(config.get('smart_format', True)).lower()
@@ -112,18 +112,21 @@ class DeepgramTranscriber:
             # Sample rate: 16000Hz for optimal compatibility with file uploads and live recording
             diarize = str(config.get('diarize', False)).lower()
             params = f"model={model}&language={language}&smart_format={smart_format}&interim_results={interim_results}&punctuate=true&diarize={diarize}&encoding=linear16&sample_rate=16000&channels=1"
-            # Include token in URL for maximum compatibility - strip any whitespace from API key
-            clean_api_key = self.api_key.strip() if self.api_key else ""
-            url = f"wss://api.deepgram.com/v1/listen?token={clean_api_key}&{params}"
+            url = f"wss://api.deepgram.com/v1/listen?{params}"
             
-            logger.info(f"Connecting to Deepgram with API key: {clean_api_key[:8]}... (URL length: {len(url)})")
+            # Strip any whitespace from API key
+            clean_api_key = self.api_key.strip() if self.api_key else ""
+            logger.info(f"Connecting to Deepgram with API key: {clean_api_key[:8]}... (length: {len(clean_api_key)})")
             
             # Store config for potential reconnection
             self.connection_config = config
             
-            # Connect to Deepgram WebSocket (auth token is in URL for compatibility)
+            # Connect to Deepgram WebSocket with Authorization header
             self.deepgram_ws = await asyncio.wait_for(
-                websockets.connect(url),
+                websockets.connect(
+                    url,
+                    extra_headers={"Authorization": f"Token {clean_api_key}"}
+                ),
                 timeout=15.0  # 15 second connection timeout
             )
             
