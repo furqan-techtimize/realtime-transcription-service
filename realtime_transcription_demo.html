@@ -914,6 +914,9 @@
                     case 'transcription_started':
                         this.log(`✅ Transcription started with ${data.provider}`, 'success');
                         this.providerStatus.textContent = `Using ${data.provider}`;
+                        // Now it's safe to start sending audio
+                        this.readyToSendAudio = true;
+                        this.log(`📡 Ready to send audio to ${data.provider}`, 'success');
                         break;
                         
                     case 'transcription_result':
@@ -1050,21 +1053,35 @@
                     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     const mediaSource = this.audioContext.createMediaStreamSource(this.audioStream);
                     
+                    // Log the actual sample rate being used
+                    const actualSampleRate = this.audioContext.sampleRate;
+                    this.log(`🎵 Audio context sample rate: ${actualSampleRate}Hz (target: 16000Hz)`, 'info');
+                    
                     // Setup analyzer for visualization
                     this.analyser = this.audioContext.createAnalyser();
                     this.analyser.fftSize = 256;
                     mediaSource.connect(this.analyser);
                     this.startVisualization();
                     
-                    // Use ScriptProcessorNode to get raw PCM audio
+                    // Set up the audio processor but don't send audio yet
                     const bufferSize = 4096;
                     this.scriptProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
                     mediaSource.connect(this.scriptProcessor);
                     this.scriptProcessor.connect(this.audioContext.destination);
                     
+                    // Flag to control when to start sending audio
+                    this.readyToSendAudio = false;
+                    this._audioLogCount = 0;
+                    
                     this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                        if (this.ws.readyState === WebSocket.OPEN) {
-                            const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                        // Only send audio if we're ready AND websocket is open
+                        if (this.readyToSendAudio && this.ws.readyState === WebSocket.OPEN) {
+                            let inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                            
+                            // Resample if needed (browser might use 44.1kHz or 48kHz instead of 16kHz)
+                            if (actualSampleRate !== 16000) {
+                                inputData = this.resampleAudio(inputData, actualSampleRate, 16000);
+                            }
                             
                             // Convert Float32Array to Int16Array (PCM 16-bit)
                             const pcmData = new Int16Array(inputData.length);
@@ -1074,23 +1091,30 @@
                             }
                             
                             this.ws.send(pcmData.buffer);
-                            this.log(`📤 Sent ${pcmData.buffer.byteLength} bytes of PCM audio`, 'info');
+                            // Only log occasionally to reduce spam
+                            this._audioLogCount++;
+                            if (this._audioLogCount <= 3 || this._audioLogCount % 100 == 0) {
+                                this.log(`📤 Sent audio chunk #${this._audioLogCount} (${pcmData.buffer.byteLength} bytes @ 16kHz)`, 'info');
+                            }
                         }
                     };
                     
-                    // Send start command
+                    // Now send start command
                     const config = {
                         command: 'start_transcription',
                         provider: this.currentProvider,
                         model: this.modelSelect.value,
                         language: this.languageSelect.value,
                         smart_format: true,
-                        interim_results: false,
+                        interim_results: true,  // Enable interim results for real-time feedback
                         diarize: this.diarizationToggle.checked
                     };
                     
                     this.ws.send(JSON.stringify(config));
                     this.log(`🚀 Starting ${this.currentProvider} transcription (diarization: ${config.diarize})...`, 'info');
+                    
+                    // Wait for transcription_started message (handled in handleMessage)
+                    // The flag will be set to true when we receive confirmation
                     
                     // Update UI
                     this.isRecording = true;
@@ -1106,6 +1130,9 @@
             
             stopRecording() {
                 this.log('🛑 Stopping recording...', 'info');
+                
+                // Stop sending audio immediately
+                this.readyToSendAudio = false;
                 
                 // Stop script processor
                 if (this.scriptProcessor) {
@@ -1615,7 +1642,7 @@
                     model: this.modelSelect.value,
                     language: 'en-US',
                     smart_format: true,
-                    interim_results: false,
+                    interim_results: true,
                     diarize: true
                 };
                 

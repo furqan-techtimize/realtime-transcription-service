@@ -120,15 +120,13 @@ class DeepgramTranscriber:
             self.connection_config = config
             
             # Connect to Deepgram WebSocket with API key in header and timeout
+            # Note: Using additional_headers for newer websockets library
             self.deepgram_ws = await asyncio.wait_for(
                 websockets.connect(
                     url,
-                    extra_headers={
+                    additional_headers={
                         "Authorization": f"Token {self.api_key}"
-                    },
-                    ping_interval=20,  # Send ping every 20 seconds
-                    ping_timeout=10,   # Wait 10 seconds for pong
-                    close_timeout=5    # Wait 5 seconds for close handshake
+                    }
                 ),
                 timeout=15.0  # 15 second connection timeout
             )
@@ -146,11 +144,14 @@ class DeepgramTranscriber:
             self._send_warning_logged = False
             
             # Start receiving messages
+            logger.info("🎧 Starting message receive task...")
             self.receive_task = asyncio.create_task(self._receive_messages())
             
             # Start keepalive task to prevent timeout
+            logger.info("💓 Starting keepalive task...")
             self.keepalive_task = asyncio.create_task(self._keepalive_loop())
             
+            logger.info("✅ All Deepgram tasks started successfully")
             return True
                 
         except asyncio.TimeoutError:
@@ -167,9 +168,17 @@ class DeepgramTranscriber:
     async def _receive_messages(self):
         """Receive and process messages from Deepgram"""
         try:
+            logger.info("📡 Started receiving messages from Deepgram...")
+            message_count = 0
             async for message in self.deepgram_ws:
                 try:
+                    message_count += 1
                     data = json.loads(message)
+                    
+                    # Log all message types to debug
+                    msg_type = data.get('type', 'Unknown')
+                    if message_count <= 5 or message_count % 20 == 0 or msg_type != 'Results':
+                        logger.info(f"📥 Received message #{message_count} from Deepgram: type={msg_type}, keys={list(data.keys())}")
                     
                     # Check if this is a transcript result - Deepgram API structure
                     if data.get('type') == 'Results':
@@ -215,7 +224,10 @@ class DeepgramTranscriber:
                                 )
                             else:
                                 # Empty transcript - log for debugging
-                                logger.debug(f"⚠️ Empty transcript (is_final={is_final}, speech_final={speech_final}, confidence={confidence:.2f})")
+                                logger.info(f"⚠️ Empty transcript (is_final={is_final}, speech_final={speech_final})")
+                        else:
+                            # No alternatives in the result
+                            logger.info(f"⚠️ No alternatives in Deepgram result. Channel keys: {list(channel.keys()) if 'channel' in data else 'N/A'}")
                     
                 except json.JSONDecodeError:
                     logger.error("Failed to parse Deepgram message")
@@ -344,15 +356,22 @@ class DeepgramTranscriber:
                 # Update last audio time
                 self.last_audio_time = time.time()
                 
+                # Log first few chunks to confirm audio is flowing
+                if not hasattr(self, '_audio_chunk_count'):
+                    self._audio_chunk_count = 0
+                self._audio_chunk_count += 1
+                
+                if self._audio_chunk_count <= 3 or self._audio_chunk_count % 100 == 0:
+                    logger.info(f"📤 Sending audio chunk #{self._audio_chunk_count} ({len(audio_data)} bytes) to Deepgram")
+                
                 await self.deepgram_ws.send(audio_data)
-                # Removed verbose audio logging - too much noise
             except Exception as e:
-                logger.error(f"❌ Error sending audio to Deepgram: {e}")
+                logger.error(f"❌ Error sending audio to Deepgram: {e}", exc_info=True)
                 self.is_connected = False
         else:
             # Only log once per disconnection to avoid spam
             if not hasattr(self, '_send_warning_logged') or not self._send_warning_logged:
-                logger.warning("⚠️ Cannot send audio - not connected to Deepgram (reconnecting...)")
+                logger.warning(f"⚠️ Cannot send audio - not connected to Deepgram (is_connected={self.is_connected}, ws={self.deepgram_ws is not None})")
                 self._send_warning_logged = True
     
     async def close(self):
@@ -692,10 +711,21 @@ class AWSTranscriber:
         """Send audio to AWS Transcribe with backpressure handling"""
         try:
             if not self.is_connected or not hasattr(self, 'audio_queue'):
+                if not hasattr(self, '_aws_warning_logged') or not self._aws_warning_logged:
+                    logger.warning(f"⚠️ Cannot send audio to AWS - not connected (is_connected={self.is_connected}, has_queue={hasattr(self, 'audio_queue')})")
+                    self._aws_warning_logged = True
                 return
             
             # Update last audio time
             self.last_audio_time = time.time()
+            
+            # Log first few chunks to confirm audio is flowing
+            if not hasattr(self, '_audio_chunk_count'):
+                self._audio_chunk_count = 0
+            self._audio_chunk_count += 1
+            
+            if self._audio_chunk_count <= 3 or self._audio_chunk_count % 100 == 0:
+                logger.info(f"📤 Queueing audio chunk #{self._audio_chunk_count} ({len(audio_data)} bytes) for AWS")
             
             # Try to add audio to queue with timeout to prevent blocking forever
             # If queue is full, wait briefly then drop if still full (backpressure)
@@ -791,8 +821,6 @@ class RealtimeTranscriptionService:
         
         # Log connection details
         logger.info(f"🔌 NEW CONNECTION: {connection_id} from {websocket.remote_address}")
-        logger.info(f"   Request path: {websocket.path}")
-        logger.info(f"   Request headers: {dict(websocket.request_headers)}")
         
         try:
             logger.info(f"Attempting to send connection established message...")
@@ -831,12 +859,20 @@ class RealtimeTranscriptionService:
     
     async def handle_messages(self, websocket, connection_id: str):
         """Handle incoming WebSocket messages"""
+        audio_chunk_count = 0
         async for message in websocket:
             try:
                 if isinstance(message, bytes):
                     # Audio data - send to transcriber if active
+                    audio_chunk_count += 1
+                    if audio_chunk_count % 50 == 0:  # Log every 50 chunks to avoid spam
+                        logger.info(f"📤 Received {audio_chunk_count} audio chunks from {connection_id}")
+                    
                     if connection_id in self.transcribers:
                         await self.transcribers[connection_id].send_audio(message)
+                    else:
+                        if audio_chunk_count == 1:
+                            logger.warning(f"⚠️ Received audio data but no transcriber active for {connection_id}")
                 else:
                     # JSON command
                     try:
@@ -908,12 +944,19 @@ class RealtimeTranscriptionService:
                 self.transcribers[connection_id] = transcriber
                 
                 logger.info(f"✅ {provider} transcription started for {connection_id}")
+                logger.info(f"📡 Ready to receive audio for {connection_id}")
+                
+                # Send a helpful message about interim results
+                interim_note = ""
+                if not config.get('interim_results', True):
+                    interim_note = " (showing only final results - may take a few seconds after speaking)"
                 
                 await self.send_message(websocket, {
                     'type': 'transcription_started',
                     'provider': provider,
                     'config': config,
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': datetime.now().isoformat(),
+                    'message': f'Connected to {provider}. Start speaking!{interim_note}'
                 })
             else:
                 error_msg = f"Failed to connect to {provider}"
@@ -992,20 +1035,18 @@ async def main():
         logger.warning("⚠️ DEEPGRAM_API_KEY not found in environment")
     
     # Configure WebSocket server to work behind Render/Cloudflare proxy
-    # Define a check_origin function that always returns True
-    def check_origin(origin):
-        logger.info(f"Origin check for: {origin}")
-        return True  # Accept all origins
-    
+    # Disable ping/pong since proxies may interfere with them
+    # The connection will be kept alive by the actual data flow
     async with websockets.serve(
         service.handle_connection,
         host,
         port,
-        ping_interval=20,
-        ping_timeout=10
+        ping_interval=None,  # Disable automatic ping/pong
+        ping_timeout=None,   # Disable ping timeout
+        close_timeout=10     # Keep close timeout reasonable
     ):
         logger.info(f"✅ Service ready on ws://{host}:{port}")
-        logger.info(f"✅ WebSocket server listening for connections")
+        logger.info(f"✅ WebSocket server listening (ping/pong disabled for proxy compatibility)")
         await asyncio.Future()  # Run forever
 
 
