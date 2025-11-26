@@ -598,11 +598,18 @@ class AWSTranscriber:
             # Create event handler and start streaming
             handler = self.event_handler_class(stream.output_stream, self)
             
-            await asyncio.gather(
-                self._write_audio_chunks(stream.input_stream, audio_generator()),
-                handler.handle_events(),
-                return_exceptions=True
-            )
+            # Run tasks with proper cancellation handling
+            try:
+                await asyncio.gather(
+                    self._write_audio_chunks(stream.input_stream, audio_generator()),
+                    handler.handle_events(),
+                    return_exceptions=True
+                )
+            except Exception as e:
+                if "InvalidStateError" in str(type(e).__name__) or "CANCELLED" in str(e):
+                    logger.debug("AWS stream tasks cancelled cleanly")
+                else:
+                    raise
             
         except asyncio.CancelledError:
             logger.info("⚠️ AWS streaming task cancelled")
@@ -760,8 +767,8 @@ class AWSTranscriber:
         # Set disconnected flag first to stop all loops
         self.is_connected = False
         
-        # Give tasks a moment to see the flag change
-        await asyncio.sleep(0.1)
+        # Wait a bit longer for audio processing to complete
+        await asyncio.sleep(0.5)
         
         # Cancel keepalive task if running
         if self.keepalive_task and not self.keepalive_task.done():
@@ -779,7 +786,7 @@ class AWSTranscriber:
             logger.debug("Cancelling streaming task...")
             self.streaming_task.cancel()
             try:
-                await asyncio.wait_for(self.streaming_task, timeout=3.0)
+                await asyncio.wait_for(self.streaming_task, timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError) as e:
                 logger.debug(f"Streaming task cleanup: {type(e).__name__}")
             except Exception as e:
