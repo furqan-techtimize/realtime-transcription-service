@@ -102,7 +102,7 @@ class DeepgramTranscriber:
             
             import websockets
             
-            # Build Deepgram WebSocket URL with parameters
+            # Build Deepgram WebSocket URL with parameters and token
             model = config.get('model', 'nova-2')
             language = config.get('language', 'en-US')
             smart_format = str(config.get('smart_format', True)).lower()
@@ -112,22 +112,17 @@ class DeepgramTranscriber:
             # Sample rate: 16000Hz for optimal compatibility with file uploads and live recording
             diarize = str(config.get('diarize', False)).lower()
             params = f"model={model}&language={language}&smart_format={smart_format}&interim_results={interim_results}&punctuate=true&diarize={diarize}&encoding=linear16&sample_rate=16000&channels=1"
-            url = f"wss://api.deepgram.com/v1/listen?{params}"
+            # Include token in URL for maximum compatibility
+            url = f"wss://api.deepgram.com/v1/listen?token={self.api_key}&{params}"
             
             logger.info(f"Connecting to: {url}")
             
             # Store config for potential reconnection
             self.connection_config = config
             
-            # Connect to Deepgram WebSocket with API key in header and timeout
-            # Note: Using additional_headers for newer websockets library
+            # Connect to Deepgram WebSocket (auth token is in URL for compatibility)
             self.deepgram_ws = await asyncio.wait_for(
-                websockets.connect(
-                    url,
-                    additional_headers={
-                        "Authorization": f"Token {self.api_key}"
-                    }
-                ),
+                websockets.connect(url),
                 timeout=15.0  # 15 second connection timeout
             )
             
